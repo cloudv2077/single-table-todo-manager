@@ -73,8 +73,6 @@ class TodoManager:
   search <keyword>        - 搜索任务
   
 🔍 筛选操作:
-  filter_by_status <status> - 按状态筛选任务
-  filter_by_priority <priority> - 按优先级筛选任务 (urgent_important/important/urgent/normal)
   overdue                 - 显示逾期任务
   
 💾 数据操作:
@@ -88,7 +86,6 @@ class TodoManager:
   python3 todo_manager.py status abc123 in_progress
   python3 todo_manager.py delete abc123
   python3 todo_manager.py restore abc123
-  python3 todo_manager.py filter_by_priority high
   python3 todo_manager.py export backup.json
   python3 todo_manager.py import backup.json
         """
@@ -96,7 +93,7 @@ class TodoManager:
     
     def show_version(self):
         """显示版本信息"""
-        print("📌 单表任务管理系统 v2.4.0")
+        print("📌 单表任务管理系统 v2.4.1")
         print("🔧 基于SQLite的统一版本控制设计 - 完整版")
         print("👤 作者: Claude Code Assistant")
         print(f"📅 版本日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -442,7 +439,8 @@ class TodoManager:
                 SELECT 
                     u.task_uuid,
                     u.task,
-                    u.version as current_version
+                    u.version as current_version,
+                    u.priority
                 FROM todo_unified u
                 JOIN (
                     SELECT task_uuid, MAX(version) as max_version
@@ -462,14 +460,14 @@ class TodoManager:
             
             # 批量删除
             deleted_count = 0
-            for task_uuid, task_name, current_version in completed_tasks:
+            for task_uuid, task_name, current_version, priority in completed_tasks:
                 new_version = current_version + 1
                 cursor.execute('''
                     INSERT INTO todo_unified (
                         task_uuid, version, task, status, priority, operation_type, change_summary
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (
-                    task_uuid, new_version, task_name, 'completed', 'medium', 
+                    task_uuid, new_version, task_name, 'completed', priority, 
                     'delete', 
                     f"Completed task cleared: {task_name}"
                 ))
@@ -478,66 +476,7 @@ class TodoManager:
             conn.commit()
             print(f"✅ 已清除 {deleted_count} 个已完成的任务")
     
-    def filter_by_status(self, status: str):
-        """按状态筛选任务"""
-        if status not in ['todo', 'in_progress', 'completed']:
-            print(f"❌ 无效状态: {status}. 有效状态: todo/in_progress/completed")
-            return
-        
-        self.list_tasks(status_filter=status)
     
-    def filter_by_priority(self, priority: str):
-        """按优先级筛选任务 (urgent_important/important/urgent/normal)"""
-        """按优先级筛选任务"""
-        valid_priorities = ['low', 'medium', 'high']
-        if priority not in valid_priorities:
-            print(f"❌ 无效优先级: {priority}. 有效优先级: {', '.join(valid_priorities)}")
-            return
-        
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT 
-                    u.task_uuid,
-                    u.task,
-                    u.status,
-                    u.priority,
-                    u.version as current_version,
-                    u.created_at as last_updated
-                FROM todo_unified u
-                JOIN (
-                    SELECT task_uuid, MAX(version) as max_version
-                    FROM todo_unified 
-                    GROUP BY task_uuid
-                ) latest ON u.task_uuid = latest.task_uuid AND u.version = latest.max_version
-                WHERE u.operation_type != 'delete' AND u.priority = ?
-                ORDER BY 
-                    CASE u.status 
-                        WHEN 'in_progress' THEN 1
-                        WHEN 'todo' THEN 2
-                        WHEN 'completed' THEN 3
-                    END,
-                    u.created_at DESC
-            ''', (priority,))
-            
-            tasks = cursor.fetchall() or []
-            
-            if not tasks:
-                print(f"📋 暂无 {priority} 优先级的任务")
-                return
-            
-            print(f"🎯 {priority} 优先级任务:")
-            print(f"{'任务UUID':<36} {'任务名称':<30} {'状态':<12} {'版本':<6}")
-            print("─" * 90)
-            
-            for task in tasks:
-                status_icon = {"todo": "🔴", "in_progress": "🟡", "completed": "✅"}
-                priority_icons = {"urgent_important": "🔴", "important": "🟡", "urgent": "🟠", "normal": "🟢"}
-                
-                print(f"{task[0]:<36} {task[1]:<30} {status_icon.get(task[2], '❓')}{task[2]:<11} {priority_icons.get(task[3], '❓')}{task[3]:<7} {task[4]}")
-            
-            print(f"\n📊 总计: {len(tasks)} 个 {priority} 优先级任务")
     
     def show_overdue_tasks(self):
         """显示逾期任务"""
@@ -579,36 +518,6 @@ class TodoManager:
                 print(f"{task[0]:<36} {task[1]:<30} {status_icon.get(task[2], '❓')}{task[2]:<11} {task[3]}")
             
             print(f"\n📊 总计: {len(overdue_tasks)} 个逾期任务")
-    
-    def show_history(self, task_uuid: str):
-        """显示任务历史"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT 
-                    version,
-                    status,
-                    operation_type,
-                    change_summary,
-                    created_at
-                FROM todo_unified 
-                WHERE task_uuid = ?
-                ORDER BY version
-            ''', (task_uuid,))
-            
-            history = cursor.fetchall() or []
-            
-            if not history:
-                print(f"❌ 未找到UUID为 {task_uuid} 的任务历史")
-                return
-            
-            print(f"📜 任务历史 (UUID: {task_uuid})")
-            print(f"{'版本':<6} {'状态':<12} {'操作类型':<15} {'变更说明':<35} {'时间':<20}")
-            print("─" * 95)
-            
-            for record in history:
-                print(f"{record[0]:<6} {record[1]:<12} {record[2]:<15} {record[3]:<35} {record[4]}")
     
     def search_tasks(self, keyword: str):
         """搜索任务"""
@@ -833,7 +742,7 @@ def main():
                 print("❌ 请提供任务名称")
                 return
             task_name = sys.argv[2]
-            priority = sys.argv[3] if len(sys.argv) > 3 else "medium"
+            priority = sys.argv[3] if len(sys.argv) > 3 else "normal"
             manager.create_task(task_name, priority)
         
         elif command == "update":
@@ -863,26 +772,8 @@ def main():
         elif command == "clear_completed":
             manager.clear_completed_tasks()
         
-        elif command == "filter_by_status":
-            if len(sys.argv) < 3:
-                print("❌ 请提供状态 (todo/in_progress/completed)")
-                return
-            manager.filter_by_status(sys.argv[2])
-        
-        elif command == "filter_by_priority":
-            if len(sys.argv) < 3:
-                print("❌ 请提供优先级 (low/medium/high)")
-                return
-            manager.filter_by_priority(sys.argv[2])
-        
         elif command == "overdue":
             manager.show_overdue_tasks()
-        
-        elif command == "history":
-            if len(sys.argv) < 3:
-                print("❌ 请提供任务UUID")
-                return
-            manager.show_history(sys.argv[2])
         
         elif command == "search":
             if len(sys.argv) < 3:
