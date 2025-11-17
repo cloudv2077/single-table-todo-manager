@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-智能优先级任务管理系统 - 统一版
-集成基础任务管理和智能优先级功能
+智能优先级任务管理系统 - 完整功能版
 基于艾森豪威尔矩阵的科学任务管理
 """
 
@@ -148,12 +147,173 @@ class TodoManager:
         
         return task_uuid
     
+    def update_task(self, task_uuid: str, field: str, value: str):
+        """更新任务字段"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # 获取当前任务信息
+            cursor.execute('''
+                SELECT task, status, priority, due_date, task_type, estimated_hours, version
+                FROM todo_unified 
+                WHERE task_uuid = ? 
+                ORDER BY version DESC LIMIT 1
+            ''', (task_uuid,))
+            
+            current = cursor.fetchone()
+            if not current:
+                print(f"❌ 未找到UUID为 {task_uuid} 的任务")
+                return
+            
+            current_task, current_status, current_priority, current_due_date, current_task_type, current_estimated_hours, current_version = current
+            
+            # 准备新版本的数据
+            new_task = current_task
+            new_status = current_status
+            new_priority = current_priority
+            new_due_date = current_due_date
+            new_task_type = current_task_type or 'general'
+            new_estimated_hours = current_estimated_hours or 0
+            
+            # 根据字段更新相应值
+            if field == 'task':
+                new_task = value
+            elif field == 'status':
+                new_status = value
+            elif field == 'priority':
+                new_priority = value
+            elif field == 'due_date':
+                new_due_date = value if value != 'null' else None
+            elif field == 'task_type':
+                new_task_type = value
+            elif field == 'estimated_hours':
+                new_estimated_hours = float(value)
+            else:
+                print(f"❌ 不支持的字段: {field}")
+                return
+            
+            # 插入新版本
+            cursor.execute('''
+                INSERT INTO todo_unified (
+                    task_uuid, version, task, status, priority, due_date, task_type, estimated_hours,
+                    operation_type, change_summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                task_uuid, current_version + 1, new_task, new_status, new_priority, 
+                new_due_date, new_task_type, new_estimated_hours,
+                'update', f'Updated {field}: {value}'
+            ))
+            
+            conn.commit()
+        
+        print(f"✅ 任务更新成功!")
+        print(f"   字段: {field}")
+        print(f"   新值: {value}")
+    
+    def show_task(self, task_uuid: str):
+        """显示任务详情和历史"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT version, task, status, priority, due_date, task_type, estimated_hours,
+                       operation_type, change_summary, created_at
+                FROM todo_unified 
+                WHERE task_uuid = ? 
+                ORDER BY version DESC
+            ''', (task_uuid,))
+            
+            versions = cursor.fetchall()
+            if not versions:
+                print(f"❌ 未找到UUID为 {task_uuid} 的任务")
+                return
+            
+            print(f"\n📋 任务详情: {task_uuid}")
+            print("=" * 70)
+            
+            # 显示最新版本
+            latest = versions[0]
+            version, task, status, priority, due_date, task_type, estimated_hours, operation_type, change_summary, created_at = latest
+            
+            print(f"📝 任务: {task}")
+            print(f"📊 状态: {status}")
+            print(f"⚡ 优先级: {priority}")
+            print(f"📅 截止日期: {due_date or '无'}")
+            print(f"🏷️ 类型: {task_type or 'general'}")
+            print(f"⏱️ 预估工时: {estimated_hours or 0}小时")
+            print(f"🕐 创建时间: {created_at}")
+            
+            # 显示智能优先级分析
+            priority_info = self.calculate_smart_priority(task_uuid)
+            if priority_info:
+                display = priority_info['display_info']
+                print(f"\n🎯 智能优先级分析:")
+                print(f"   动态权重: {priority_info['dynamic_weight']:.1f}/150")
+                print(f"   {display['action']}")
+                
+                if priority_info['time_pressure'] > 0:
+                    time_info = priority_info['time_pressure_info']
+                    print(f"   {time_info['color']} 时间压力: {time_info['level']} (+{priority_info['time_pressure']:.0f}%)")
+            
+            # 显示版本历史
+            if len(versions) > 1:
+                print(f"\n📚 版本历史 ({len(versions)} 个版本):")
+                print("─" * 70)
+                for version_data in versions:
+                    version, task, status, priority, due_date, task_type, estimated_hours, operation_type, change_summary, created_at = version_data
+                    print(f"v{version} | {operation_type} | {created_at} | {change_summary}")
+    
     def list_tasks(self, status_filter: Optional[str] = None, smart_mode: bool = True):
         """列出任务"""
         if smart_mode:
             self.show_enhanced_task_list(status_filter)
         else:
             self.show_basic_task_list(status_filter)
+    
+    def show_basic_task_list(self, status_filter: Optional[str] = None):
+        """显示基础任务列表"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            if status_filter:
+                cursor.execute('''
+                    SELECT u.task_uuid, u.task, u.status, u.priority, u.due_date
+                    FROM todo_unified u
+                    JOIN (
+                        SELECT task_uuid, MAX(version) as max_version
+                        FROM todo_unified GROUP BY task_uuid
+                    ) latest ON u.task_uuid = latest.task_uuid AND u.version = latest.max_version
+                    WHERE u.operation_type != 'delete' AND u.status = ?
+                    ORDER BY u.created_at DESC
+                ''', (status_filter,))
+            else:
+                cursor.execute('''
+                    SELECT u.task_uuid, u.task, u.status, u.priority, u.due_date
+                    FROM todo_unified u
+                    JOIN (
+                        SELECT task_uuid, MAX(version) as max_version
+                        FROM todo_unified GROUP BY task_uuid
+                    ) latest ON u.task_uuid = latest.task_uuid AND u.version = latest.max_version
+                    WHERE u.operation_type != 'delete'
+                    ORDER BY u.created_at DESC
+                ''')
+            
+            tasks = cursor.fetchall()
+            
+            if not tasks:
+                print("📝 暂无任务")
+                return
+            
+            print(f"\n📋 基础任务列表 (共 {len(tasks)} 个)")
+            print("=" * 80)
+            print(f"{'UUID[:8]':<10} {'任务':<30} {'状态':<12} {'优先级':<15} {'截止日期':<12}")
+            print("-" * 80)
+            
+            for task_uuid, task, status, priority, due_date in tasks:
+                uuid_short = task_uuid[:8]
+                task_display = task[:27] + "..." if len(task) > 30 else task
+                due_display = due_date or "无"
+                
+                print(f"{uuid_short:<10} {task_display:<30} {status:<12} {priority:<15} {due_display:<12}")
     
     def show_enhanced_task_list(self, status_filter: Optional[str] = None):
         """显示增强版智能优先级任务列表"""
@@ -229,6 +389,204 @@ class TodoManager:
                 print(f"{uuid_short:<10} {task_name:<45} {priority_display:<20} {task_info['dynamic_weight']:<8.1f} {time_display:<20} {due_date:<12}")
             
             print(f"\n📊 总计: {len(task_priorities)} 个任务")
+    
+    def search_tasks(self, keyword: str):
+        """搜索任务"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT u.task_uuid, u.task, u.status, u.priority, u.due_date
+                FROM todo_unified u
+                JOIN (
+                    SELECT task_uuid, MAX(version) as max_version
+                    FROM todo_unified GROUP BY task_uuid
+                ) latest ON u.task_uuid = latest.task_uuid AND u.version = latest.max_version
+                WHERE u.operation_type != 'delete' AND u.task LIKE ?
+                ORDER BY u.created_at DESC
+            ''', (f'%{keyword}%',))
+            
+            results = cursor.fetchall()
+            
+            if not results:
+                print(f"🔍 未找到包含 '{keyword}' 的任务")
+                return
+            
+            print(f"\n🔍 搜索结果 (关键词: {keyword})")
+            print("=" * 80)
+            print(f"{'UUID[:8]':<10} {'任务':<35} {'状态':<12} {'优先级':<15} {'截止日期':<12}")
+            print("-" * 80)
+            
+            for task_uuid, task, status, priority, due_date in results:
+                uuid_short = task_uuid[:8]
+                task_display = task[:32] + "..." if len(task) > 35 else task
+                due_display = due_date or "无"
+                
+                # 高亮关键词
+                if keyword.lower() in task.lower():
+                    task_display = task_display.replace(keyword, f"**{keyword}**")
+                
+                print(f"{uuid_short:<10} {task_display:<35} {status:<12} {priority:<15} {due_display:<12}")
+    
+    def delete_task(self, task_uuid: str):
+        """删除任务（软删除）"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # 检查任务是否存在
+            cursor.execute('''
+                SELECT task, version FROM todo_unified 
+                WHERE task_uuid = ? 
+                ORDER BY version DESC LIMIT 1
+            ''', (task_uuid,))
+            
+            result = cursor.fetchone()
+            if not result:
+                print(f"❌ 未找到UUID为 {task_uuid} 的任务")
+                return
+            
+            task, current_version = result
+            
+            # 创建删除记录
+            cursor.execute('''
+                INSERT INTO todo_unified (
+                    task_uuid, version, task, operation_type, change_summary
+                ) VALUES (?, ?, ?, ?, ?)
+            ''', (
+                task_uuid, current_version + 1, task, 'delete', f'Deleted task: {task[:50]}'
+            ))
+            
+            conn.commit()
+        
+        print(f"✅ 任务已删除: {task}")
+    
+    def show_eisenhower_matrix(self):
+        """显示艾森豪威尔矩阵视图"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # 获取所有活跃任务UUID
+            cursor.execute('''
+                SELECT u.task_uuid
+                FROM todo_unified u
+                JOIN (
+                    SELECT task_uuid, MAX(version) as max_version
+                    FROM todo_unified GROUP BY task_uuid
+                ) latest ON u.task_uuid = latest.task_uuid AND u.version = latest.max_version
+                WHERE u.operation_type != 'delete'
+            ''')
+            
+            task_uuids = [row[0] for row in cursor.fetchall()]
+            
+            # 按象限分类
+            matrix = {
+                'Q1_urgent_important': [],
+                'Q2_important': [],
+                'Q3_urgent': [],
+                'Q4_normal': []
+            }
+            
+            quadrant_map = {
+                'urgent_important': 'Q1_urgent_important',
+                'important': 'Q2_important',
+                'urgent': 'Q3_urgent',
+                'normal': 'Q4_normal'
+            }
+            
+            for uuid in task_uuids:
+                priority_info = self.calculate_smart_priority(uuid)
+                if priority_info:
+                    final_priority = priority_info['final_priority']
+                    quadrant = quadrant_map.get(final_priority, 'Q4_normal')
+                    matrix[quadrant].append(priority_info)
+            
+            # 显示矩阵
+            print("\n" + "="*80)
+            print("🎯 艾森豪威尔矩阵 - 智能任务优先级管理")
+            print("="*80)
+            
+            print("\n📊 矩阵分布:")
+            print("┌─────────────────────────────────────┬─────────────────────────────────────┐")
+            print("│             重要 + 紧急              │             重要 + 不紧急            │")
+            print("│           🔥 Q1 - 立即执行           │           ⭐ Q2 - 计划安排           │")
+            print("├─────────────────────────────────────┼─────────────────────────────────────┤")
+            print("│            不重要 + 紧急             │           不重要 + 不紧急            │")
+            print("│           ⚡ Q3 - 委托处理           │           📝 Q4 - 消除删除           │")
+            print("└─────────────────────────────────────┴─────────────────────────────────────┘")
+            
+            # 显示各象限详情
+            quadrants = [
+                ('Q1_urgent_important', '🔥 Q1 象限 - 紧急且重要 (立即执行)'),
+                ('Q2_important', '⭐ Q2 象限 - 重要但不紧急 (计划安排)'),
+                ('Q3_urgent', '⚡ Q3 象限 - 紧急但不重要 (委托处理)'),
+                ('Q4_normal', '📝 Q4 象限 - 既不紧急也不重要 (考虑删除)')
+            ]
+            
+            for quadrant_key, title in quadrants:
+                tasks = matrix.get(quadrant_key, [])
+                print(f"\n{title}")
+                print("─" * 70)
+                
+                if not tasks:
+                    print("  📝 暂无任务")
+                    continue
+                
+                # 按权重排序
+                tasks.sort(key=lambda x: x['dynamic_weight'], reverse=True)
+                
+                for task_info in tasks[:5]:  # 只显示前5个
+                    # 智能截断任务名称
+                    task_display = self._truncate_text(task_info['task'], 55)
+                    
+                    print(f"  • {task_display}")
+                    print(f"    UUID: {task_info['task_uuid'][:8]}... | 权重: {task_info['dynamic_weight']:.1f}")
+                    
+                    # 显示时间压力详情
+                    if task_info['time_pressure'] > 0:
+                        time_info = task_info['time_pressure_info']
+                        print(f"    {time_info['color']} 时间压力: {time_info['level']} ({time_info['desc']}) +{task_info['time_pressure']:.0f}%")
+                    print()
+                
+                if len(tasks) > 5:
+                    print(f"  ... 还有 {len(tasks) - 5} 个任务")
+    
+    def analyze_task_detailed(self, task_uuid: str):
+        """详细任务分析"""
+        priority_info = self.calculate_smart_priority(task_uuid)
+        
+        if not priority_info:
+            print(f"❌ 未找到UUID为 {task_uuid} 的任务")
+            return
+        
+        print(f"\n🔬 任务智能分析")
+        print("="*70)
+        
+        # 任务基本信息
+        task_display = self._truncate_text(priority_info['task'], 60)
+        print(f"📋 任务: {task_display}")
+        print(f"🔗 UUID: {priority_info['task_uuid']}")
+        
+        # 优先级分析
+        print(f"\n🎯 优先级分析:")
+        print(f"   原始优先级: {priority_info['base_priority']}")
+        print(f"   智能优先级: {priority_info['final_priority']}")
+        
+        # 权重分析
+        print(f"\n⚖️ 权重构成分析:")
+        print(f"   基础权重: {priority_info['base_weight']}")
+        print(f"   动态权重: {priority_info['dynamic_weight']:.1f}/150")
+        
+        # 详细的时间压力分析
+        time_info = priority_info['time_pressure_info']
+        print(f"\n⏰ 时间压力详析:")
+        print(f"   {time_info['color']} 压力等级: {time_info['level']} ({time_info['desc']})")
+        print(f"   📈 权重贡献: +{priority_info['time_pressure']:.1f}%")
+        
+        # 行动建议
+        display = priority_info['display_info']
+        print(f"\n💡 推荐行动:")
+        print(f"   {display['action']}")
+        print(f"   建议提示: {', '.join(display['tips'][:2])}")
+        print(f"   时间安排: {time_info['advice']}")
     
     def calculate_smart_priority(self, task_uuid: str) -> Dict:
         """计算智能优先级"""
@@ -379,16 +737,110 @@ class TodoManager:
         else:
             return truncated + "..."
     
+    def export_data(self, export_path: str = None):
+        """导出数据到JSON文件"""
+        if not export_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_path = f"todo_export_{timestamp}.json"
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM todo_unified ORDER BY created_at')
+            
+            # 获取列名
+            columns = [description[0] for description in cursor.description]
+            
+            # 获取所有数据
+            rows = cursor.fetchall()
+            
+            # 转换为字典列表
+            data = []
+            for row in rows:
+                record = dict(zip(columns, row))
+                data.append(record)
+        
+        # 导出到JSON文件
+        with open(export_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        print(f"✅ 数据已导出到: {export_path}")
+        print(f"📊 导出记录数: {len(data)}")
+    
+    def import_data(self, import_path: str):
+        """从JSON文件导入数据"""
+        if not os.path.exists(import_path):
+            print(f"❌ 文件不存在: {import_path}")
+            return
+        
+        try:
+            with open(import_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            print(f"❌ JSON文件格式错误: {import_path}")
+            return
+        
+        if not isinstance(data, list):
+            print("❌ 导入文件格式错误，需要JSON数组格式")
+            return
+        
+        # 导入数据
+        imported_count = 0
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            for record in data:
+                try:
+                    cursor.execute('''
+                        INSERT INTO todo_unified (
+                            task_uuid, version, task, status, priority, due_date, 
+                            task_type, estimated_hours, operation_type, change_summary, 
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        record.get('task_uuid'),
+                        record.get('version', 1),
+                        record.get('task', ''),
+                        record.get('status', 'todo'),
+                        record.get('priority', 'normal'),
+                        record.get('due_date'),
+                        record.get('task_type', 'general'),
+                        record.get('estimated_hours', 0),
+                        record.get('operation_type', 'migration'),
+                        record.get('change_summary', 'Imported from JSON'),
+                        record.get('created_at'),
+                        record.get('updated_at')
+                    ))
+                    imported_count += 1
+                except sqlite3.Error as e:
+                    print(f"⚠️ 跳过记录 (UUID: {record.get('task_uuid', 'unknown')}): {e}")
+                    continue
+            
+            conn.commit()
+        
+        print(f"✅ 数据导入完成!")
+        print(f"📊 成功导入: {imported_count} 条记录")
+    
     def show_help(self):
         """显示帮助信息"""
         help_text = """
-🎯 智能优先级任务管理系统 - 帮助指南
+🎯 智能优先级任务管理系统 - 完整功能版
 
 📋 基础任务管理:
    python3 todo_manager.py create "任务内容" [priority] [due_date] [task_type] [estimated_hours]
+   python3 todo_manager.py update <UUID> <field> <value>
+   python3 todo_manager.py show <UUID>
+   python3 todo_manager.py search "关键词"
+   python3 todo_manager.py delete <UUID>
+
+🎯 智能优先级功能:
    python3 todo_manager.py list [status]          # 智能优先级任务列表 (推荐)
+   python3 todo_manager.py list --basic [status]  # 传统基础列表
    python3 todo_manager.py matrix                 # 艾森豪威尔矩阵视图
    python3 todo_manager.py analyze <UUID>         # 详细任务分析
+
+📊 数据管理:
+   python3 todo_manager.py export [filepath]      # 导出数据到JSON
+   python3 todo_manager.py import <filepath>      # 从JSON导入数据
 
 🏷️ 支持的优先级:
    • urgent_important  - 🔥 紧急且重要 (Q1)
@@ -399,6 +851,8 @@ class TodoManager:
 📂 支持的任务类型:
    emergency, meeting, deadline, communication, development, bug_fix, 
    security, client, routine, learning, maintenance, research, general
+
+📅 日期格式: YYYY-MM-DD (如: 2025-11-25)
 
 🎯 智能优先级特性:
    • 基于艾森豪威尔矩阵的科学分类
@@ -437,15 +891,78 @@ def main():
             
             manager.create_task(task, priority, due_date, task_type, estimated_hours)
         
+        elif command == "update":
+            if len(sys.argv) < 5:
+                print("❌ 使用方法: update <UUID> <field> <value>")
+                return
+            
+            task_uuid = sys.argv[2]
+            field = sys.argv[3]
+            value = sys.argv[4]
+            
+            manager.update_task(task_uuid, field, value)
+        
+        elif command == "show":
+            if len(sys.argv) < 3:
+                print("❌ 请提供任务UUID")
+                return
+            
+            task_uuid = sys.argv[2]
+            manager.show_task(task_uuid)
+        
         elif command == "list":
-            status_filter = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in ['todo', 'in_progress', 'completed'] else None
-            manager.list_tasks(status_filter, smart_mode=True)
+            # 检查是否使用基础模式
+            basic_mode = '--basic' in sys.argv
+            status_filter = None
+            
+            for arg in sys.argv[2:]:
+                if arg != '--basic' and arg in ['todo', 'in_progress', 'completed']:
+                    status_filter = arg
+                    break
+            
+            if basic_mode:
+                manager.show_basic_task_list(status_filter)
+            else:
+                manager.list_tasks(status_filter, smart_mode=True)
         
         elif command == "matrix":
-            print("🎯 矩阵功能开发中...")
+            manager.show_eisenhower_matrix()
         
         elif command == "analyze":
-            print("🔬 分析功能开发中...")
+            if len(sys.argv) < 3:
+                print("❌ 请提供任务UUID")
+                return
+            
+            task_uuid = sys.argv[2]
+            manager.analyze_task_detailed(task_uuid)
+        
+        elif command == "search":
+            if len(sys.argv) < 3:
+                print("❌ 请提供搜索关键词")
+                return
+            
+            keyword = sys.argv[2]
+            manager.search_tasks(keyword)
+        
+        elif command == "delete":
+            if len(sys.argv) < 3:
+                print("❌ 请提供任务UUID")
+                return
+            
+            task_uuid = sys.argv[2]
+            manager.delete_task(task_uuid)
+        
+        elif command == "export":
+            export_path = sys.argv[2] if len(sys.argv) > 2 else None
+            manager.export_data(export_path)
+        
+        elif command == "import":
+            if len(sys.argv) < 3:
+                print("❌ 请提供导入文件路径")
+                return
+            
+            import_path = sys.argv[2]
+            manager.import_data(import_path)
         
         elif command == "help":
             manager.show_help()
