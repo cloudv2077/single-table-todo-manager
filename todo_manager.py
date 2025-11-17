@@ -95,7 +95,7 @@ class TodoManager:
         """显示版本信息"""
         print("📌 单表任务管理系统 v2.4.1")
         print("🔧 基于SQLite的统一版本控制设计 - 完整版")
-        print("👤 作者: Claude Code Assistant")
+        print("👤 作者: cloudv2077")
         print(f"📅 版本日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     def clear_screen(self):

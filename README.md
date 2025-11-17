@@ -356,7 +356,7 @@ SOFTWARE.
 
 ## 👤 作者
 
-**Claude Code Assistant** - 基于AI的任务管理系统开发助手
+**cloudv2077** - 单表任务管理系统开发者
 
 ## 📅 更新日志
 
