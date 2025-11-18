@@ -683,19 +683,29 @@ class TodoManager:
     def _calculate_type_weight(self, task_type: str) -> float:
         """根据任务类型计算权重"""
         type_weights = {
-            'emergency': 0.4,     # 紧急事务
-            'meeting': 0.25,      # 会议
-            'deadline': 0.3,      # 有明确截止日期
-            'communication': 0.15, # 沟通协调
-            'development': 0.2,   # 开发任务
-            'bug_fix': 0.35,      # Bug修复
-            'security': 0.4,      # 安全相关
-            'client': 0.3,        # 客户相关
-            'routine': 0.05,      # 日常事务
-            'learning': 0.1,      # 学习任务
-            'maintenance': 0.08,  # 维护任务
-            'research': 0.12,     # 研究任务
-            'general': 0.0        # 普通任务
+            # [紧急响应]
+            'emergency': 0.4,         # 紧急事务
+            'security': 0.4,          # 安全相关
+            'bug_fix': 0.35,          # Bug修复
+            
+            # [业务核心]
+            'client': 0.3,            # 客户相关
+            'deadline': 0.3,          # 有明确截止日期
+            'development': 0.2,       # 开发任务
+            
+            # [协调沟通]
+            'meeting': 0.25,          # 会议
+            'communication': 0.15,    # 沟通协调
+            
+            # [支撑运营]
+            'maintenance': 0.08,      # 维护任务
+            'routine': 0.05,          # 日常事务
+            
+            # [发展提升]
+            'research': 0.12,         # 研究任务
+            
+            # [通用任务]
+            'general': 0.0            # 普通任务
         }
         return type_weights.get(task_type.lower(), 0.0)
     
